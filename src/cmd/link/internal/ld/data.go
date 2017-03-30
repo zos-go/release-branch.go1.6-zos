@@ -9,7 +9,7 @@
 //	Portions Copyright © 2004,2006 Bruce Ellis
 //	Portions Copyright © 2005-2007 C H Forsyth (forsyth@terzarima.net)
 //	Revisions Copyright © 2000-2007 Lucent Technologies Inc. and others
-//	Portions Copyright © 2009 The Go Authors.  All rights reserved.
+//	Portions Copyright © 2009-2016 The Go Authors.  All rights reserved.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -148,6 +148,9 @@ func Addpcrelplus(ctxt *Link, s *LSym, t *LSym, add int64) int64 {
 	r.Add = add
 	r.Type = obj.R_PCREL
 	r.Siz = 4
+	if Thearch.Thechar == 'z' {
+		r.Variant = RV_390_DBL
+	}
 	return i + int64(r.Siz)
 }
 
@@ -364,6 +367,18 @@ func relocsym(s *LSym) {
 			Diag("unreachable sym in relocation: %s %s", s.Name, r.Sym.Name)
 		}
 
+		// TODO(mundaym): Move this conversion somewhere more appropriate.
+		// Ideally the obj relocations would support variants.
+		if Thearch.Thechar == 'z' {
+			switch r.Type {
+			case obj.R_PCRELDBL:
+				r.Type = obj.R_PCREL
+				r.Variant = RV_390_DBL
+			case obj.R_CALL:
+				r.Variant = RV_390_DBL
+			}
+		}
+
 		switch r.Type {
 		default:
 			switch siz {
@@ -454,7 +469,9 @@ func relocsym(s *LSym) {
 
 				o = r.Xadd
 				if Iself {
-					if Thearch.Thechar == '6' {
+					if Isgoff {
+						o = r.Add
+					} else if Thearch.Thechar == '6' || Thearch.Thechar == 'z' {
 						o = 0
 					}
 				} else if HEADTYPE == obj.Hdarwin {
@@ -514,7 +531,9 @@ func relocsym(s *LSym) {
 
 				o = r.Xadd
 				if Iself {
-					if Thearch.Thechar == '6' {
+					if Isgoff {
+						o = Symaddr(rs) + r.Xadd - (Symaddr(s) + int64(r.Off))
+					} else if Thearch.Thechar == '6' || Thearch.Thechar == 'z' {
 						o = 0
 					}
 				} else if HEADTYPE == obj.Hdarwin {
@@ -601,6 +620,25 @@ func relocsym(s *LSym) {
 
 		case 8:
 			Ctxt.Arch.ByteOrder.PutUint64(s.P[off:], uint64(o))
+		// chwan -
+		case 16:
+			// This is the relocatable for setting up the z/OS XPLINK function descriptor
+			// (64-bit style)
+			if goos == "zos" &&
+				((strings.HasPrefix(r.Sym.Name, "_cgo_") &&
+					strings.Contains(r.Sym.Name, "_Cfunc_")) ||
+					r.Sym.Name == "x_cgo_thread_start" ||
+					r.Sym.Name == "x_cgo_sys_thread_create" ||
+					r.Sym.Name == "x_cgo_notify_runtime_init_done" ||
+					r.Sym.Name == "x_cgo_init" ||
+					r.Sym.Name == "x_cgo_malloc" ||
+					r.Sym.Name == "x_cgo_free") {
+				Ctxt.Arch.ByteOrder.PutUint64(s.P[off:], uint64(0))
+				Ctxt.Arch.ByteOrder.PutUint64(s.P[off+8:], uint64(o))
+			} else {
+				Ctxt.Cursym = s
+				Diag("bad reloc size %#x for %s", uint32(r.Siz), r.Sym.Name)
+			}
 		}
 	}
 }
@@ -1030,6 +1068,13 @@ func symalign(s *LSym) int32 {
 	if align < s.Align {
 		align = s.Align
 	}
+
+	// TODO(mundaym): Minalign should probably be a new attribute on 'Thearch'
+	if Thearch.Thechar == 'z' && align < 2 {
+		// Relative addressing requires a 2 byte alignment on s390x.
+		align = 2
+	}
+
 	return align
 }
 
@@ -1159,6 +1204,7 @@ func dodata() {
 	for s := datap; s != nil; s = s.Next {
 		if int64(len(s.P)) > s.Size {
 			Diag("%s: initialize bounds (%d < %d)", s.Name, int64(s.Size), len(s.P))
+			s.Size = int64(len(s.P)) // hack to allow linking of asm into go // TODO(WGO)
 		}
 	}
 

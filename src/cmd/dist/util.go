@@ -1,4 +1,4 @@
-// Copyright 2012 The Go Authors.  All rights reserved.
+// Copyright 2012-2016 The Go Authors.  All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -422,6 +422,8 @@ func main() {
 		}
 	case "windows":
 		exe = ".exe"
+	case "zos":
+		gohostarch = "s390x"
 	}
 
 	sysinit()
@@ -452,6 +454,8 @@ func main() {
 			} else {
 				gohostarch = "mips64le"
 			}
+		case strings.Contains(out, "s390x"):
+			gohostarch = "s390x"
 		case gohostos == "darwin":
 			if strings.Contains(run("", CheckExit, "uname", "-v"), "RELEASE_ARM_") {
 				gohostarch = "arm"
